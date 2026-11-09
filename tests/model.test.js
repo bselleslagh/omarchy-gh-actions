@@ -457,3 +457,12 @@ test('no shipped QML can render GitHub data as rich text or hardcode a color', (
       assert.match(part.slice(0, 200), /textFormat:\s*Text\.PlainText/, `${file} has a Text without PlainText`);
   }
 });
+
+test('no QML property reuses a name every Item already has', () => {
+  // A child item reading such a name gets its own built-in one: a segment bar
+  // named its input "states" and its Repeater drew nothing.
+  for (const file of fs.readdirSync(root).filter(name => name.endsWith('.qml'))) {
+    const clash = read(file).match(/\bproperty\s+\S+\s+(states|state|data|children|resources|transitions)\s*:/);
+    assert.equal(clash, null, `${file} declares a property named "${clash && clash[1]}"`);
+  }
+});

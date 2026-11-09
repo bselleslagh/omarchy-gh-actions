@@ -208,10 +208,13 @@ Panel {
   }
 
   component SegmentBar: Row {
-    property var states: []
+    id: segmentBar
+    // Not "states": every Item has a states list, and the Repeater inside
+    // would read its own (always empty) one instead of this.
+    property var segments: []
     spacing: Style.space(2)
     Repeater {
-      model: states
+      model: segmentBar.segments
       Rectangle {
         required property string modelData
         width: Style.space(7)
@@ -302,7 +305,7 @@ Panel {
           SegmentBar {
             anchors.verticalCenter: parent.verticalCenter
             visible: runRow.showsJobs
-            states: runRow.summary ? runRow.summary.segments : []
+            segments: runRow.summary ? runRow.summary.segments : []
           }
           SmallLabel {
             anchors.verticalCenter: parent.verticalCenter

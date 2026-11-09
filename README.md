@@ -2,6 +2,8 @@
 
 An Omarchy bar widget that shows the GitHub Actions runs in the repos you subscribe to, and notifies you when a run you care about fails, finishes or waits for approval.
 
+![The panel with a failing run's jobs open, next to its notifications](preview.png)
+
 ## What it does
 
 - **Repos tab:** press `/` and type to search your GitHub, or type a full `owner/name`. Each repo has a rule for what notifies you: watched runs (the default), all failures or all runs.
@@ -12,6 +14,18 @@ An Omarchy bar widget that shows the GitHub Actions runs in the repos you subscr
 - **Mine / All:** narrows the lists and the bar count to runs you started or watch.
 
 The first version only reads from GitHub. It has no Re-run or Cancel.
+
+## Screenshots
+
+| Running, with a run's jobs open | Recent |
+|---|---|
+| <img src="docs/screenshots/running.png" width="420" alt="Running tab with a failing run's jobs open"> | <img src="docs/screenshots/recent.png" width="420" alt="Recent tab with finished runs"> |
+| **Repos and their rules** | **Notifications** |
+| <img src="docs/screenshots/repos.png" width="420" alt="Repos tab with a notify rule per repo"> | <img src="docs/screenshots/notifications.png" width="420" alt="Failing, passed and waiting notifications"> |
+| **Following a light theme (Catppuccin Latte)** | |
+| <img src="docs/screenshots/light-theme.png" width="420" alt="The panel in the Catppuccin Latte theme"> | |
+
+The screenshots use made-up repos.
 
 ## Bar icon
 
