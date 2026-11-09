@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.bselleslagh.gh-actions",
+  "name": "GitHub Actions",
+  "version": "0.1.0",
+  "author": "Ben Selleslagh",
+  "license": "MIT",
+  "description": "See the GitHub Actions runs in the repos you subscribe to, and get a notification when a run you care about fails, finishes or waits for approval. Uses your GitHub CLI sign-in and checks GitHub in the background while you have repos subscribed.",
+  "kinds": [
+    "bar-widget",
+    "service"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml",
+    "service": "Service.qml"
+  },
+  "barWidget": {
+    "displayName": "GitHub Actions",
+    "description": "Running workflows across your repos, with notifications",
+    "category": "Development",
+    "aliases": ["github", "gh", "actions", "ci", "pipelines", "workflows"],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "autoWatchMine": true,
+      "pollIntervalSec": 20,
+      "hideWhenQuiet": false
+    },
+    "schema": [
+      {
+        "key": "autoWatchMine",
+        "type": "boolean",
+        "label": "Automatically watch runs you start",
+        "defaultValue": true
+      },
+      {
+        "key": "pollIntervalSec",
+        "type": "integer",
+        "label": "Check interval while runs are active (seconds)",
+        "min": 10,
+        "max": 300,
+        "step": 5,
+        "defaultValue": 20
+      },
+      {
+        "key": "hideWhenQuiet",
+        "type": "boolean",
+        "label": "Hide the bar icon when nothing is running",
+        "defaultValue": false
+      }
+    ]
+  }
+}
