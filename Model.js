@@ -45,21 +45,31 @@ function choicesRequest() {
   return { id: "choices", kind: "choices", path: "user/repos?per_page=100&sort=pushed", jq: "[.[].full_name]" }
 }
 
+// A request's `path` names the resource (and keys its etag); `endpoint` is what
+// goes on gh's command line. Command lines are readable by every account on the
+// machine and a repo may be private, so the endpoint leaves the repo out: gh
+// fills {owner} and {repo} from GH_REPO, which is set in gh's environment, and a
+// process's environment is only readable by your own account.
+function repoPath(repo, rest) { return "repos/" + repo + rest }
+function repoEndpoint(rest) { return "repos/{owner}/{repo}" + rest }
+
 function listRequest(repo) {
+  var rest = "/actions/runs?per_page=30"
   return { id: "list:" + repo, kind: "list", repo: repo,
-           path: "repos/" + repo + "/actions/runs?per_page=30",
+           path: repoPath(repo, rest), endpoint: repoEndpoint(rest),
            jq: "{runs:[.workflow_runs[]|" + RUN_FIELDS + "]}" }
 }
 
 function runRequest(repo, id) {
+  var rest = "/actions/runs/" + id
   return { id: "run:" + repo + "#" + id, kind: "run", repo: repo, runId: id,
-           path: "repos/" + repo + "/actions/runs/" + id, jq: RUN_FIELDS }
+           path: repoPath(repo, rest), endpoint: repoEndpoint(rest), jq: RUN_FIELDS }
 }
 
 function jobsRequest(repo, id) {
+  var rest = "/actions/runs/" + id + "/jobs?per_page=100&filter=latest"
   return { id: "jobs:" + repo + "#" + id, kind: "jobs", repo: repo, runId: id,
-           path: "repos/" + repo + "/actions/runs/" + id + "/jobs?per_page=100&filter=latest",
-           jq: JOBS_FILTER }
+           path: repoPath(repo, rest), endpoint: repoEndpoint(rest), jq: JOBS_FILTER }
 }
 
 // A 304 only helps while the data it confirms is still held, and a request that
@@ -74,9 +84,15 @@ function etagFor(request, etags, jobs, listed) {
 
 // `env` so a missing gh is a plain exit 127 rather than a failed process start.
 function ghArgv(request, etag) {
-  var argv = ["env", "gh", "api", "--include", "--method", "GET", request.path, "--jq", request.jq]
+  var argv = ["env", "gh", "api", "--include", "--method", "GET", request.endpoint || request.path, "--jq", request.jq]
   if (etag) argv.push("--header", "If-None-Match: " + etag)
   return argv
+}
+
+// A null unsets GH_REPO for the requests that name no repo, so one inherited from
+// the shell's environment cannot fill a placeholder.
+function ghEnvironment(request) {
+  return { GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", GH_REPO: request.repo ? String(request.repo) : null }
 }
 
 // `gh api --include` prints the status line and headers, a blank line, then the
@@ -665,8 +681,7 @@ function joinParts(parts) {
 // ---------- Notifications ----------
 
 // Notification text comes from whoever can push to a repo. The toast sanitises
-// markup itself; this also keeps a workflow named like an option from being read
-// as one by the sender's argument parser.
+// markup itself; this also keeps a workflow named like an option looking like one.
 function notifyText(value) {
   return String(value || "").replace(/[<>&]/g, " ").replace(/^[\s-]+/, "").slice(0, 300)
 }
@@ -734,10 +749,65 @@ function parseBody(response) {
   try { return JSON.parse(response.body) } catch (e) { return null }
 }
 
-function notifyArgv(note, replaceId) {
-  var argv = ["omarchy-notification-send", "--app-name", "GitHub Actions", "-g", note.glyph, "-u", note.urgency, "-p"]
-  if (replaceId > 0) argv.push("-r", String(replaceId))
-  argv.push(note.title || "GitHub Actions", note.body || " ")
-  if (note.url) argv.push("--action", note.action, "xdg-open", "--with", note.url)
-  return argv
+// ---------- Notification delivery ----------
+//
+// A notification names a workflow, a branch and failed jobs, and for a private
+// repo those are as confidential as the repo. Process arguments are readable by
+// every account on the machine, so none of that may go on a command line: not
+// ours, and not one we start a program with, which is why the packaged
+// omarchy-notification-send (which passes its text on to busctl as arguments) is
+// only used for the fixed fallback below. Everything a notification says goes to
+// notify.pl on stdin as one line of JSON, and it calls the same Notify method on
+// the session bus. Its command line is fixed.
+
+var NOTIFY_APP = "GitHub Actions"
+var URGENCY = { low: 0, normal: 1, critical: 2 }
+
+function fileUrlPath(url) {
+  var text = String(url || "")
+  if (!/^file:\/\//.test(text)) return ""
+  try { return decodeURIComponent(text.replace(/^file:\/\//, "")) } catch (e) { return "" }
+}
+
+// Cutting text to length can split an emoji's surrogate pair, and a lone half is
+// not valid UTF-8, so the helper would refuse the whole line.
+function wellFormed(value) {
+  return String(value || "").replace(/[\ud800-\udbff](?![\udc00-\udfff])|(^|[^\ud800-\udbff])[\udc00-\udfff]/g,
+    function(whole, before) { return (before || "") + "\ufffd" })
+}
+
+// `env` so a missing perl is a plain exit 127 rather than a failed process start.
+function notifyHelperArgv(helperPath) {
+  return ["env", "perl", "--", helperPath]
+}
+
+// The hints are the ones omarchy-notification-send sets for -g and --action: the
+// card's click and its button both run the first action.
+function notifyPayload(note, replaceId) {
+  var hints = {}
+  if (note.glyph) hints["omarchy-glyph"] = wellFormed(note.glyph)
+  if (note.url) {
+    var argv = ["xdg-open", note.url]
+    hints["omarchy-actions"] = JSON.stringify([{ label: wellFormed(note.action) || NOTIFY_APP, argv: argv }])
+    hints["omarchy-exec-argv"] = JSON.stringify(argv)
+  }
+  return JSON.stringify({
+    app: NOTIFY_APP,
+    replaceId: replaceId > 0 ? Math.floor(replaceId) : 0,
+    summary: wellFormed(note.title) || NOTIFY_APP,
+    body: wellFormed(note.body),
+    urgency: URGENCY.hasOwnProperty(note.urgency) ? URGENCY[note.urgency] : URGENCY.normal,
+    hints: hints
+  }) + "\n"
+}
+
+// The helper exits 1 when it could not send at all (and env 127 when there is no
+// perl). The run still gets a card, but one that says nothing about it: only the
+// fixed strings passed in here ever reach this command line.
+function notifyFailed(exitCode) {
+  return exitCode !== 0 && exitCode !== 3
+}
+
+function notifyFallbackArgv(title, body) {
+  return ["omarchy-notification-send", "--app-name", NOTIFY_APP, "-g", GLYPHS.idle, "-u", "normal", title, body]
 }

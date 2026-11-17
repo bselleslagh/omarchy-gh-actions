@@ -21,6 +21,7 @@ Item {
   property var manifest: null
 
   readonly property string stateDir: (Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") || "") + "/.local/state") + "/omarchy/gh-actions"
+  readonly property string notifyHelper: Model.fileUrlPath(Qt.resolvedUrl("notify.pl"))
   readonly property int maxNotificationsPerRound: 5
   readonly property int maxJobFetchesPerRound: 12
 
@@ -183,6 +184,7 @@ Item {
     }
     current = queue.shift()
     ghProcess.command = Model.ghArgv(current, Model.etagFor(current, etags, jobs, listed))
+    ghProcess.environment = Model.ghEnvironment(current)
     ghProcess.running = true
     watchdog.restart()
   }
@@ -374,24 +376,25 @@ Item {
     var note = { urgency: "normal", glyph: Model.GLYPHS.idle, url: "",
                  title: Model.fill(strings.t("notify.more"), overflowThisRound), body: strings.t("notify.moreBody") }
     overflowThisRound = 0
-    sendArgv(Model.notifyArgv(note, 0), "")
+    send(note, 0, "")
   }
 
   function sendNotification(event, summary) {
     var note = Model.notificationFor(event, summary, function(key) { return strings.t(key) })
     // A warning's id is kept, so the final result can replace it on screen.
-    sendArgv(Model.notifyArgv(note, event.replaceId || 0), event.final ? "" : event.run.key)
+    send(note, event.replaceId || 0, event.final ? "" : event.run.key)
   }
 
-  function sendArgv(argv, key) {
-    notifyQueue.push({ argv: argv, key: key })
+  // What the notification says goes to the helper on stdin, never on a command
+  // line: see "Notification delivery" in Model.js.
+  function send(note, replaceId, key) {
+    notifyQueue.push({ payload: Model.notifyPayload(note, replaceId), key: key })
     nextNotification()
   }
 
   function nextNotification() {
     if (notifying || notifyProcess.running || notifyQueue.length === 0) return
     notifying = notifyQueue.shift()
-    notifyProcess.command = notifying.argv
     notifyProcess.running = true
   }
 
@@ -399,7 +402,6 @@ Item {
 
   Process {
     id: ghProcess
-    environment: ({ GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1" })
     stdout: StdioCollector { id: ghOutput; waitForEnd: true }
     stderr: StdioCollector { id: ghErrors; waitForEnd: true }
     onExited: function(code) { service.finish(code) }
@@ -416,12 +418,18 @@ Item {
 
   Process {
     id: notifyProcess
+    command: Model.notifyHelperArgv(service.notifyHelper)
+    stdinEnabled: true
     stdout: StdioCollector { id: notifyOutput; waitForEnd: true }
-    onExited: {
+    onStarted: if (service.notifying) write(service.notifying.payload)
+    onExited: function(code) {
       var sent = service.notifying
       service.notifying = null
       var id = parseInt(notifyOutput.text, 10)
       if (sent && sent.key && id > 0) service.st = Model.setNotifId(service.st, sent.key, id)
+      // Only fixed strings: nothing about the run can reach this command line.
+      if (sent && Model.notifyFailed(code))
+        Quickshell.execDetached(Model.notifyFallbackArgv(strings.t("notify.fallback"), strings.t("notify.fallbackBody")))
       Qt.callLater(service.nextNotification)
     }
   }

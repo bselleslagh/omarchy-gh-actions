@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.bselleslagh.gh-actions",
   "name": "GitHub Actions",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": "Ben Selleslagh",
   "license": "MIT",
   "description": "See the GitHub Actions runs in the repos you subscribe to, and get a notification when a run you care about fails, finishes or waits for approval. Uses your GitHub CLI sign-in and checks GitHub in the background while you have repos subscribed.",

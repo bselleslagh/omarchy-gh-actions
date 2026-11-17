@@ -69,7 +69,17 @@ This disables the plugin, takes its icon off the bar and deletes its files. Your
 
 While you have repos subscribed, the plugin checks GitHub through `gh`: every 20 seconds while runs are active (you can change this in Setup > Plugins), and every minute otherwise. Checks that find no change don't count against GitHub's rate limit, and it pauses when the limit runs low. With no repos subscribed it makes no calls.
 
-Your subscriptions and watched runs are stored in `~/.local/state/omarchy/gh-actions/state.json`. Data goes only between `gh` and GitHub.
+Your subscriptions and watched runs are stored in `~/.local/state/omarchy/gh-actions/state.json`, in a folder only your account can open. Data goes only between `gh` and GitHub.
+
+## Private repos
+
+Other accounts on the same computer can read any process's command line, so nothing about your runs goes on one:
+
+- Notifications are sent by `notify.pl`, which gets the text on stdin and calls the same `org.freedesktop.Notifications` method that `omarchy-notification-send` calls, over your own session bus. Its command line is always just `perl -- …/notify.pl`. It only uses Perl's core modules, and Perl is part of every Omarchy install.
+- `gh` gets the repo through `GH_REPO` in its environment, which only your account can read. Its command line says `repos/{owner}/{repo}/…`.
+- If `notify.pl` can't reach the notification daemon, you get a card that only says a run needs a look, sent with `omarchy-notification-send`.
+
+Clicking a notification still opens the run in your browser, and the browser gets its address on its command line, like any link you open.
 
 ## Settings
 
@@ -91,7 +101,7 @@ All colors come from the active Omarchy theme and change live when you switch th
 
 ## Development
 
-Tests cover the logic in `Model.js` and run with Node's built-in test runner.
+Tests cover the logic in `Model.js` and run with Node's built-in test runner (`node --test tests/`). `tests/notify.test.js` also sends notifications through `notify.pl` on a private D-Bus with a stand-in daemon and checks that the helper's command line shows none of their text. It needs `dbus-run-session` and Python's `dbus` and `gi` modules, and is skipped without them.
 
 Quickshell keeps its own copy of a plugin's files once loaded, so restart the shell to pick up code changes.
 

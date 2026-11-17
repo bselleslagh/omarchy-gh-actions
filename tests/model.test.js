@@ -87,6 +87,24 @@ test('the etag header is only sent when there is one', () => {
   assert.equal(request.path, 'repos/acme/app/actions/runs?per_page=30');
 });
 
+test('a private repo name never goes on gh\'s command line', () => {
+  // Command lines are readable by every local account; the environment is not.
+  const secret = 'acme-corp/secret-project';
+  for (const request of [Model.listRequest(secret), Model.runRequest(secret, 7), Model.jobsRequest(secret, 7)]) {
+    const argv = plain(Model.ghArgv(request, 'W/"etag"'));
+    assert.equal(argv.join('\n').includes('secret'), false, argv.join(' '));
+    assert.equal(argv.join('\n').includes('acme-corp'), false, argv.join(' '));
+    assert.match(argv[6], /^repos\/\{owner\}\/\{repo\}\/actions\/runs/);
+    assert.equal(Model.ghEnvironment(request).GH_REPO, secret);
+    // The etag stays keyed by the real resource, so repos never share one.
+    assert.equal(request.path.startsWith(`repos/${secret}/`), true);
+  }
+  assert.notEqual(Model.listRequest('a/one').path, Model.listRequest('a/two').path);
+  // Requests that name no repo unset an inherited GH_REPO.
+  assert.equal(Model.ghEnvironment(Model.meRequest()).GH_REPO, null);
+  assert.equal(Model.ghEnvironment(Model.choicesRequest()).GH_REPO, null);
+});
+
 test('a cached etag is only sent while its data is still held', () => {
   const list = Model.listRequest(repo);
   const jobs = Model.jobsRequest(repo, 1);
@@ -427,17 +445,71 @@ test('notification text cannot carry markup or pose as an option', () => {
   assert.doesNotMatch(note.title, /[<>]/);
   assert.doesNotMatch(note.body, /[<>]/);
   assert.match(note.title, /^[^-]/);
-  const argv = plain(Model.notifyArgv(note, 0));
-  assert.equal(argv[argv.indexOf('-p') + 1], note.title);
+  assert.equal(JSON.parse(Model.notifyPayload(note, 0)).summary, note.title);
 });
 
-test('the notification argv only opens a validated link', () => {
+test('the notification only opens a validated link', () => {
   const note = Model.notificationFor({kind: 'passed', run: run(1)}, null, t);
-  const argv = plain(Model.notifyArgv(note, 9));
-  assert.deepEqual(argv.slice(argv.indexOf('--action')), ['--action', 'Open run', 'xdg-open', '--with', note.url]);
-  assert.deepEqual(argv.slice(argv.indexOf('-r'), argv.indexOf('-r') + 2), ['-r', '9']);
+  const payload = JSON.parse(Model.notifyPayload(note, 9));
+  assert.equal(payload.replaceId, 9);
+  assert.deepEqual(JSON.parse(payload.hints['omarchy-actions']), [{label: 'Open run', argv: ['xdg-open', note.url]}]);
+  assert.deepEqual(JSON.parse(payload.hints['omarchy-exec-argv']), ['xdg-open', note.url]);
   const unsafe = Model.notificationFor({kind: 'passed', run: run(1, {url: 'https://evil.test/'})}, null, t);
-  assert.equal(plain(Model.notifyArgv(unsafe, 0)).includes('--action'), false);
+  const hints = JSON.parse(Model.notifyPayload(unsafe, 0)).hints;
+  assert.equal('omarchy-actions' in hints || 'omarchy-exec-argv' in hints, false);
+});
+
+// The marketplace review of 3bd7562: workflow, branch and job names from a
+// private repo went on omarchy-notification-send's command line, which any
+// local account can read.
+test('nothing a notification says goes on a command line', () => {
+  const secrets = ['SecretWorkflow', 'secret-branch', 'secret-org', 'secret-repo', 'secret_job_a', 'secret_job_b'];
+  const privateRun = run(5, {
+    name: 'SecretWorkflow', branch: 'secret-branch', status: 'completed', conclusion: 'failure',
+    url: 'https://github.com/secret-org/secret-repo/actions/runs/5',
+  });
+  privateRun.repo = 'secret-org/secret-repo';
+  const summary = Model.jobSummary({total: 3, jobs: [
+    {name: 'secret_job_a', status: 'completed', conclusion: 'failure'},
+    {name: 'secret_job_b', status: 'in_progress', conclusion: null},
+  ]});
+  const helperArgv = plain(Model.notifyHelperArgv('/home/u/.config/omarchy/plugins/x/notify.pl'));
+  const fallbackArgv = plain(Model.notifyFallbackArgv(t('notify.fallback'), t('notify.fallbackBody')));
+  assert.deepEqual(helperArgv, ['env', 'perl', '--', '/home/u/.config/omarchy/plugins/x/notify.pl']);
+  for (const kind of ['failing', 'failed', 'passed', 'cancelled', 'waiting', 'other']) {
+    const note = Model.notificationFor({kind, run: privateRun}, summary, t);
+    const payload = Model.notifyPayload(note, 3);
+    // It all still reaches the card, through the helper's stdin.
+    assert.match(payload, /SecretWorkflow/, kind);
+    assert.match(payload, /secret-org\/secret-repo/, kind);
+    assert.equal(payload.endsWith('\n') && payload.indexOf('\n') === payload.length - 1, true, 'one line');
+    for (const argv of [helperArgv, fallbackArgv])
+      for (const secret of secrets)
+        assert.equal(argv.join('\n').includes(secret), false, `${kind}: ${secret} in ${argv.join(' ')}`);
+  }
+  // The fallback says nothing about the run.
+  assert.equal(fallbackArgv.slice(-2).join(' '), `${t('notify.fallback')} ${t('notify.fallbackBody')}`);
+  assert.equal(Model.notifyFailed(0), false);
+  assert.equal(Model.notifyFailed(3), false);
+  assert.equal(Model.notifyFailed(1), true);
+  assert.equal(Model.notifyFailed(127), true);
+});
+
+test('the service only starts notification commands that carry no run data', () => {
+  const code = read('Service.qml').replace(/^\s*\/\/.*$/gm, '');
+  // The helper's command is fixed and the payload is written to its stdin.
+  assert.match(code, /command:\s*Model\.notifyHelperArgv\(service\.notifyHelper\)/);
+  assert.match(code, /stdinEnabled:\s*true/);
+  assert.match(code, /onStarted:\s*if \(service\.notifying\) write\(service\.notifying\.payload\)/);
+  assert.equal(/notifyProcess\.command\s*=/.test(code), false, 'the notify command is never reassigned');
+  assert.doesNotMatch(code, /omarchy-notification-send|notify-send|busctl|gdbus|dbus-send/);
+  // Every other command it starts is built from fixed strings only.
+  const detached = [...code.matchAll(/execDetached\(([^\n]*)\)\s*$/gm)].map(m => m[1]);
+  assert.ok(detached.length >= 1);
+  for (const args of detached)
+    assert.doesNotMatch(args, /\b(note|event|run|summary|sent\.payload|payload)\b/, args);
+  const shell = read('Model.js');
+  assert.equal((shell.match(/omarchy-notification-send"/g) || []).length, 1, 'only the fixed fallback uses the CLI');
 });
 
 test('theme colors come from the active theme and fall back when missing', () => {

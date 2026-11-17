@@ -62,5 +62,7 @@
   "notify.waitingDetail": "It may need your approval",
   "notify.finished": "%1 finished",
   "notify.more": "%1 more runs finished",
-  "notify.moreBody": "Open the Recent tab to see them"
+  "notify.moreBody": "Open the Recent tab to see them",
+  "notify.fallback": "A GitHub Actions run needs a look",
+  "notify.fallbackBody": "Open the GitHub Actions panel to see it"
 }
